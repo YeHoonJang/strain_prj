@@ -19,7 +19,7 @@ class CustomDataset(Dataset):
         self.X = []     # n_past 만큼의 feature 데이터
         self.y = []     # n_future 만큼의 label 데이터
         x_col = (df.shape[1]) - 1   # df 에서 -1번째 columns 까지 x
-        for i in range(n_past, len(df) - n_future + 1):
+        for i in range(n_past, len(df) - n_future + 1): # -1 말고 변수로
             self.X.append(df[i - n_past:i, 0:x_col])
             self.y.append(df[i + n_future - 1: i + n_future, x_col])
 
@@ -75,7 +75,7 @@ class LSTM(nn.Module):
 
         self.embedding = nn.Linear(n_feature, dim_embed)    # n_feature -> dim_model 사이즈로 embedding
         self.fc = nn.Linear(dim_model, n_future)    # dim_model -> n_future 사이즈
-        self.lstm = nn.LSTM(input_size=dim_embed, hidden_size=dim_model, dropout=dropout, batch_first=False)
+        self.lstm = nn.Transformer(input_size=dim_embed, hidden_size=dim_model, dropout=dropout)
         # self.relu = nn.ReLU()
 
     def forward(self, x):
@@ -89,7 +89,7 @@ class LSTM(nn.Module):
         return out
 
 
-model = LSTM(n_feature=3, n_past=30, n_future=1, n_layers=8,dim_model=512, dim_embed=256, dropout=0.1)
+model = LSTM(n_feature=3, n_past=30, n_future=1, n_layers=8, dim_model=512, dim_embed=256, dropout=0.1)
 model.to(device)
 
 
@@ -156,15 +156,15 @@ print("Start Training..")
 for epoch in range(start_epoch, epochs):
     print(f"Epoch: {epoch}")
     epoch_loss = train_one_epoch(model, train_loader, criterion, optimizer, device)
-    print(f"Training Loss: {epoch_loss:.3f}")
+    print(f"Training Loss: {epoch_loss:.5f}")
 
     valid_loss, y_list, output_list = evaluate(model, valid_loader, criterion, device)
     rmse = np.sqrt(valid_loss)
-    print(f"Validation Loss: {valid_loss:.3f}")
-    print(f'RMSE is {rmse:.3f}')
+    print(f"Validation Loss: {valid_loss:.5f}")
+    print(f'RMSE is {rmse:.5f}')
 
-    y_list = minmax_scaler2.inverse_transform(np.array(y_list).reshape(-1, 1)).reshape(-1)
-    output_list = minmax_scaler2.inverse_transform(np.array(output_list).reshape(-1, 1)).reshape(-1)
+    # y_list = minmax_scaler2.inverse_transform(np.array(y_list).reshape(-1, 1)).reshape(-1)
+    # output_list = minmax_scaler2.inverse_transform(np.array(output_list).reshape(-1, 1)).reshape(-1)
 
     plt.clf()
     plt.figure(figsize=(10, 8))
@@ -174,7 +174,7 @@ for epoch in range(start_epoch, epochs):
     if not os.path.isdir(data_path):
         os.mkdir(data_path)
 
-    plt.savefig(f"{data_path}/figure_{epoch}.png")
+    plt.savefig(f"{data_path}/figure_{int(epoch)+1}.png")
 
 
 
