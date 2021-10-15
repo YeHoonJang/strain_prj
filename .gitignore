@@ -1,6 +1,10 @@
 *.ipynb
 *.txt
+*.png
+*.csv
+
 data
+figure
 
 .idea/
 .DS_Store
