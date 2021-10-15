@@ -1,4 +1,6 @@
 *.ipynb
+*.txt
+data
 
 .idea/
 .DS_Store
