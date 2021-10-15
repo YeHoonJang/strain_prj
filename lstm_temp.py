@@ -153,6 +153,7 @@ def train_one_epoch(model, criterion, data_loader, optimizer, device, epoch, max
     total = len(data_loader)
 
     with tqdm.tqdm(total=total) as pbar:
+
         for i, (src, trg) in enumerate(data_loader):
             src = src.float().to(device, non_blocking=True)
             trg = trg.float().to(device, non_blocking=True)
