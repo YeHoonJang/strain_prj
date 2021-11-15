@@ -8,6 +8,7 @@ from sklearn.preprocessing import MinMaxScaler
 
 import torch
 from torch import nn
+import torch.nn.functional as F
 from torch.utils.data import Dataset, DataLoader
 
 
@@ -53,7 +54,6 @@ total_data_scaled2 = minmax_scaler2.transform(np.array(total_data.Str3[:]).resha
 train_valid_split = int(len(total_data_scaled) * 0.3)   #argparse
 df_train = total_data_scaled[:-train_valid_split]
 df_valid = total_data_scaled[-train_valid_split:]
-# print(df_train.shape, df_valid.shape)
 
 train_data = CustomDataset(df_train, 30, 1)     #argparse
 valid_data = CustomDataset(df_valid, 30, 1)
@@ -63,45 +63,82 @@ train_loader = DataLoader(train_data, batch_size=batch_size, drop_last=True, num
 valid_loader = DataLoader(valid_data, batch_size=batch_size, drop_last=True, num_workers=8)
 
 
-# LSTM
-class LSTM(nn.Module):
-    def __init__(self, n_feature, n_past, n_future, n_layers, dim_model, dim_embed, dropout):
-        super(LSTM, self).__init__()
-        self.n_feature = n_feature
+class VAELSTM(nn.Module):
+    def __init__(self, n_features, n_past, n_future, n_layers, hidden_size, embed_size, dropout):
+        super(VAELSTM, self).__init__()
+
+        self.n_features = n_features
         self.n_past = n_past
         self.n_future = n_future
         self.n_layers = n_layers
-        self.dim_model = dim_model
-        self.dim_embed = dim_embed
+        self.hidden_size = hidden_size
+        self.embed_size = embed_size
         self.dropout = dropout
 
-        self.embedding = nn.Linear(n_feature, dim_embed)    # n_feature -> dim_model 사이즈로 embedding
-        self.fc = nn.Linear(dim_model, n_future)    # dim_model -> n_future 사이즈
-        self.lstm = nn.LSTM(input_size=dim_embed, hidden_size=dim_model, dropout=dropout)
-        # self.relu = nn.ReLU()
+        # encoder
+        self.embedding_embed = nn.Linear(n_features, embed_size)
+        self.embedding_hidden = nn.Linear(embed_size, hidden_size)
+        self.encoder = nn.LSTM(input_size=embed_size, hidden_size=hidden_size, dropout=dropout)
+
+        #decoder
+        self.decoder = nn.LSTM(input_size=hidden_size, hidden_size=embed_size, dropout=dropout)
+        self.fc = nn.Linear(embed_size, n_future)
+
+
+        self.hidden2mean = nn.Linear(hidden_size, embed_size)   #embedsize == latent_size
+        self.hidden2logv = nn.Linear(hidden_size, embed_size)   #embedsize == latent_size
+        self.latent2hidden = nn.Linear(embed_size, embed_size)
+        self.hidden2embed = nn.Linear(self.hidden_size, self.embed_size)
+
+
+    def reparameterize(self, mu, log_var):
+        std = torch.exp(0.5*log_var)
+        eps = torch.randn_like(std)
+        sample = mu + (eps * std)
+        return sample
 
     def forward(self, x):
-        # hidden state/cell state 초기화
-        h = torch.zeros(1, self.n_past, self.dim_model).to(device)
-        c = torch.zeros(1, self.n_past, self.dim_model).to(device)
+        # encoding
+        _, (hidden, cell) = self.encoder(self.embedding_embed(x))
 
-        # out, (h, c) = self.lstm(self.embedding(x),)
-        out, (h, c) = self.lstm(self.embedding(x), (h, c))
-        out = self.fc(out[:, -1, :])
-        return out
+        # get mu, log_var
+        mu = self.hidden2mean(hidden).to(device)
+        logv = self.hidden2logv(hidden).to(device)
+        z = self.reparameterize(mu, logv).to(device)
+
+        # decoding
+        hidden = self.latent2hidden(z).to(device)
+        cell = self.hidden2embed(cell)
+        outputs, _ = self.decoder(self.embedding_hidden(self.embedding_embed(x)), (hidden, cell)) # [batch_size, n_past, hidden]
+        out = self.fc(outputs[:, -1, :]) # [batch_size, n_future]
+
+        return out, mu, logv, z
 
 
-model = LSTM(n_feature=2, n_past=30, n_future=1, n_layers=8, dim_model=512, dim_embed=256, dropout=0.1)
+def kl_anneal_function(epoch, k, x0):
+    # logistic
+    return float(1/(1+np.exp(-k*(epoch-x0))))
+
+
+
+def loss_fn(out, target, mu, logv, epoch, k, xo):
+    MSE = nn.MSELoss()
+    MSE_loss = MSE(out, target)
+
+    # KL Divergence
+    KL_loss = -0.5 * torch.sum(1+logv-mu.pow(2)-logv.exp())
+    KL_weight = kl_anneal_function(epoch, k, xo)
+
+    return MSE_loss, KL_loss, KL_weight
+
+model = VAELSTM(n_features=2, n_past=30, n_future=1, n_layers=8, hidden_size=512, embed_size=256, dropout=0.1)
 model.to(device)
 
-
-criterion = nn.MSELoss()
 optimizer = torch.optim.AdamW(model.parameters(), lr=0.001)
 
 
-def train_one_epoch(model, data_loader, criterion, optimizer, device):
+def train_one_epoch(model, data_loader, optimizer, device):
     model.train()
-    criterion.train()
 
     train_loss = 0.0
     total = len(data_loader)
@@ -111,8 +148,10 @@ def train_one_epoch(model, data_loader, criterion, optimizer, device):
             X = X.float().to(device)
             y = y.float().to(device)
 
-            output = model(X)   # forward
-            loss = criterion(output, y)
+            output, mu, logv, z = model(X)   # forward
+
+            MSE_loss, KL_loss, KL_weight = loss_fn(output, y, mu, logv, epoch, 0.0025, 2500)   # k=0.0025, x0=2500
+            loss = (MSE_loss + KL_loss*KL_weight)
             loss_value = loss.item()
             train_loss += loss_value
 
@@ -124,12 +163,11 @@ def train_one_epoch(model, data_loader, criterion, optimizer, device):
     return train_loss/total
 
 @torch.no_grad()    #no autograd (backpropagation X)
-def evaluate(model, data_loader, criterion, device):
+def evaluate(model, data_loader, device):
     y_list = []
     output_list = []
 
     model.eval()
-    criterion.eval()
 
     valid_loss = 0.0
     total = len(data_loader)
@@ -139,8 +177,9 @@ def evaluate(model, data_loader, criterion, device):
             X = X.float().to(device)
             y = y.float().to(device)
 
-            output = model(X)
-            loss = criterion(output, y)
+            output, mu, logv, z = model(X)
+            MSE_loss, KL_loss, KL_weight = loss_fn(output, y, mu, logv, epoch, 0.0025, 2500)  # k=0.0025, x0=2500
+            loss = (MSE_loss + KL_loss * KL_weight)
             loss_value = loss.item()
             valid_loss += loss_value
 
@@ -155,29 +194,30 @@ def evaluate(model, data_loader, criterion, device):
 start_epoch = 0
 epochs = 100  #argparse
 print("Start Training..")
-for epoch in range(start_epoch, epochs):
+for epoch in range(start_epoch, epochs+1):
     print(f"Epoch: {epoch}")
-    epoch_loss = train_one_epoch(model, train_loader, criterion, optimizer, device)
+    epoch_loss = train_one_epoch(model, train_loader, optimizer, device)
     print(f"Training Loss: {epoch_loss:.5f}")
 
-    valid_loss, y_list, output_list = evaluate(model, valid_loader, criterion, device)
-    rmse = np.sqrt(valid_loss)
+    valid_loss, y_list, output_list = evaluate(model, valid_loader, device)
+    # rmse = np.sqrt(valid_loss)
     print(f"Validation Loss: {valid_loss:.5f}")
-    print(f'RMSE is {rmse:.5f}')
+    # print(f'RMSE is {rmse:.5f}')
 
     y_list = minmax_scaler2.inverse_transform(np.array(y_list).reshape(-1, 1)).reshape(-1)
     output_list = minmax_scaler2.inverse_transform(np.array(output_list).reshape(-1, 1)).reshape(-1)
 
-    plt.clf()
-    plt.figure(figsize=(10, 8))
-    plt.plot(y_list)
-    plt.plot(output_list)
-    data_path = os.path.join(os.getcwd(), "data", "figure")
-    if not os.path.isdir(data_path):
-        os.mkdir(data_path)
+    if epoch%5 == 0:
+        plt.clf()
+        plt.figure(figsize=(10, 8))
+        plt.plot(y_list)
+        plt.plot(output_list)
+        data_path = os.path.join(os.getcwd(), "data", "figure")
+        if not os.path.isdir(data_path):
+            os.mkdir(data_path)
 
-    plt.savefig(f"{data_path}/figure_{int(epoch)+1}.png")
-    plt.close()
+        plt.savefig(f"{data_path}/figure_{int(epoch)+1}.png")
+        plt.close()
 
 
 

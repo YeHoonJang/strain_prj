@@ -1,6 +1,6 @@
 import os
 import tqdm
-import math
+
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
@@ -37,7 +37,7 @@ device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 print(f'Initializing Device: {device}')
 
 # Data Setting
-file_path = os.path.join(os.getcwd(), "data/01000513.txt")
+file_path = os.path.join(os.getcwd(), "data/01000002.txt")
 total_data = pd.read_csv(file_path, sep="\t", index_col="Timestamp")
 # total_data = total_data.loc[:, ["AccZ", "Str1", "Str2", "Str3"]]
 total_data = total_data.loc[:, ["Str1", "Str2", "Str3"]]
@@ -58,95 +58,45 @@ df_valid = total_data_scaled[-train_valid_split:]
 train_data = CustomDataset(df_train, 30, 1)     #argparse
 valid_data = CustomDataset(df_valid, 30, 1)
 
-batch_size = 200     #argparse
+batch_size = 100     #argparse
 train_loader = DataLoader(train_data, batch_size=batch_size, drop_last=True, num_workers=8)    # drop_last = drop the last incomplete batch
 valid_loader = DataLoader(valid_data, batch_size=batch_size, drop_last=True, num_workers=8)
 
 
-# Transformer
-class Transformer(nn.Module):
-    def __init__(self, dim_embed, n_feature, n_past, n_future, hidden_size, n_layers, dropout):
-        super(Transformer, self).__init__()
-
-        self.dim_embed = dim_embed
+# LSTM
+class LSTM(nn.Module):
+    def __init__(self, n_feature, n_past, n_future, n_layers, dim_model, dim_embed, dropout):
+        super(LSTM, self).__init__()
         self.n_feature = n_feature
         self.n_past = n_past
         self.n_future = n_future
-        self.hidden_size = hidden_size
         self.n_layers = n_layers
+        self.dim_model = dim_model
+        self.dim_embed = dim_embed
         self.dropout = dropout
 
-        # self.embedding = nn.Embedding(n_feature, dim_embed)
-        self.embedding = nn.Linear(n_feature, dim_embed)
-        self.pos_encoder = PositionalEncoding(dim_embed)
-        self.encoder_layer = nn.TransformerEncoderLayer(d_model=dim_embed, nhead=4, dropout=dropout)
-        self.transformer_encoder = nn.TransformerEncoder(self.encoder_layer, num_layers=n_layers)
-
-        self.linear_1 = nn.Linear(dim_embed, hidden_size*2)
-        self.linear_2 = nn.Linear(hidden_size*2, hidden_size)
-        self.linear_seq = nn.Sequential(self.linear_1, nn.ReLU(), self.linear_2)
-
-        self.decoder_1 = nn.Linear(hidden_size, n_future)
-        self.decoder_2 = nn.Linear(n_past, n_future)
-
-    def encoder(self, x):
-        mask = self.generate_square_subsequent_mask(len(x)).to(device)
-        src = self.embedding(x)*math.sqrt(self.dim_embed)
-        src = self.pos_encoder(src)
-
-        out = self.encoder_layer(src)
-        out = self.transformer_encoder(out, mask)
-
-        mean = self.linear_seq(out)
-        logvar = self.linear_seq(out)
-
-        return mean, logvar
+        self.embedding = nn.Linear(n_feature, dim_embed)    # n_feature -> dim_model 사이즈로 embedding
+        self.fc = nn.Linear(dim_model, n_future)    # dim_model -> n_future 사이즈
+        self.lstm = nn.LSTM(input_size=dim_embed, hidden_size=dim_model, dropout=dropout)
+        # self.relu = nn.ReLU()
 
     def forward(self, x):
-        mean, logvar = self.encoder(x)
-        z = self.reparameterize(mean, logvar)
+        # hidden state/cell state 초기화
+        h = torch.zeros(1, self.n_past, self.dim_model).to(device)
+        c = torch.zeros(1, self.n_past, self.dim_model).to(device)
 
-        out = self.decoder_1(z).transpose(1, 2)
-        # print("1 out", out.size())
-        out = self.decoder_2(out)
-        # print("2 out", out.size())
-
-        # return z, mean, logvar, out
+        # out, (h, c) = self.lstm(self.embedding(x),)
+        out, (h, c) = self.lstm(self.embedding(x), (h, c))
+        out = self.fc(out[:, -1, :])
         return out
 
-    def generate_square_subsequent_mask(self, sz):
-        mask = (torch.triu(torch.ones(sz, sz))==1).transpose(0, 1)
-        mask = mask.float().masked_fill(mask == 0, float('-inf')).masked_fill(mask == 1, float(0.0))
-        return mask
 
-    def reparameterize(self, mean, logvar):
-        std = torch.exp(0.5 * logvar)
-        eps = torch.randn_like(std)
-        return eps * std + mean
-
-
-
-class PositionalEncoding(nn.Module):
-    def __init__(self, d_model, max_len=5000):
-        super(PositionalEncoding, self).__init__()
-        pe = torch.zeros(max_len, d_model)
-        position = torch.arange(0, max_len, dtype=torch.float).unsqueeze(1)
-        div_term = torch.exp(torch.arange(0, d_model, 2).float() * (-math.log(10000.0) / d_model))
-
-        pe[:, 0::2] = torch.sin(position * div_term)
-        pe[:, 1::2] = torch.cos(position * div_term)
-        pe = pe.unsqueeze(0).transpose(0, 1)
-        self.register_buffer('pe', pe)
-
-    def forward(self, x):
-        return x + self.pe[:x.size(0), :]
-
-model = Transformer(dim_embed=512, n_feature=2, n_past=30, n_future=1, hidden_size=128, n_layers=3, dropout=0.1)
+model = LSTM(n_feature=2, n_past=30, n_future=1, n_layers=8, dim_model=512, dim_embed=256, dropout=0.1)
 model.to(device)
 
 
 criterion = nn.MSELoss()
-optimizer = torch.optim.AdamW(model.parameters(), lr=0.00001)
+optimizer = torch.optim.AdamW(model.parameters(), lr=0.001)
 
 
 def train_one_epoch(model, data_loader, criterion, optimizer, device):
@@ -160,13 +110,8 @@ def train_one_epoch(model, data_loader, criterion, optimizer, device):
         for _, (X, y) in enumerate(data_loader):
             X = X.float().to(device)
             y = y.float().to(device)
-            y = y.unsqueeze(1)
-            # print("y size:", y.size())
 
-            # print(model(X))
             output = model(X)   # forward
-
-            # print("output size:", output.size())
             loss = criterion(output, y)
             loss_value = loss.item()
             train_loss += loss_value
@@ -193,7 +138,6 @@ def evaluate(model, data_loader, criterion, device):
         for _, (X, y) in enumerate(data_loader):
             X = X.float().to(device)
             y = y.float().to(device)
-            y = y.unsqueeze(1)
 
             output = model(X)
             loss = criterion(output, y)
@@ -233,7 +177,7 @@ for epoch in range(start_epoch, epochs):
         os.mkdir(data_path)
 
     plt.savefig(f"{data_path}/figure_{int(epoch)+1}.png")
-
+    plt.close()
 
 
 
