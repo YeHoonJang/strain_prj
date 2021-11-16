@@ -207,17 +207,16 @@ for epoch in range(start_epoch, epochs+1):
     y_list = minmax_scaler2.inverse_transform(np.array(y_list).reshape(-1, 1)).reshape(-1)
     output_list = minmax_scaler2.inverse_transform(np.array(output_list).reshape(-1, 1)).reshape(-1)
 
-    if epoch%5 == 0:
-        plt.clf()
-        plt.figure(figsize=(10, 8))
-        plt.plot(y_list)
-        plt.plot(output_list)
-        data_path = os.path.join(os.getcwd(), "data", "figure")
-        if not os.path.isdir(data_path):
-            os.mkdir(data_path)
+    plt.clf()
+    plt.figure(figsize=(10, 8))
+    plt.plot(y_list)
+    plt.plot(output_list)
+    data_path = os.path.join(os.getcwd(), "data", "figure")
+    if not os.path.isdir(data_path):
+        os.mkdir(data_path)
 
-        plt.savefig(f"{data_path}/figure_{int(epoch)+1}.png")
-        plt.close()
+    plt.savefig(f"{data_path}/figure_{int(epoch)+1}.png")
+    plt.close()
 
 
 
