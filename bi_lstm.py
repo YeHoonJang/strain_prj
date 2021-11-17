@@ -1,6 +1,5 @@
 import os
 import tqdm
-import math
 
 import pandas as pd
 import numpy as np
@@ -66,95 +65,31 @@ train_loader = DataLoader(train_data, batch_size=batch_size, drop_last=True, num
 valid_loader = DataLoader(valid_data, batch_size=batch_size, drop_last=True, num_workers=8)
 
 
-# Transformer
-class TransformerEncoder(nn.Module):
-    def __init__(self, n_feature, n_past, n_future, n_layers, n_head, dim_embed, dropout):
-        super(TransformerEncoder, self).__init__()
-
-        self.n_feature = n_feature
-        self.n_past = n_past
-        self.n_future = n_future
-        self.n_layers = n_layers
-        self.n_head = n_head
-        self.dim_embed = dim_embed
-        self.dropout = dropout
-
-        self.embedding = nn.Linear(n_feature, dim_embed)    # n_feature -> dim_model 사이즈로 embedding
-        self.pos_encoding = PositionalEncoding(dim_embed)
-
-        self.encoder_layer = nn.TransformerEncoderLayer(d_model=dim_embed, nhead=n_head, dropout=dropout)
-        self.transformer_encoder = nn.TransformerEncoder(self.encoder_layer, num_layers=n_layers)
-
-        self.decoder = nn.Linear(dim_embed, n_future)
-
+# BiLSTM
+class BiLSTM(nn.Module):
+    def __init__(self, device):
+        super(BiLSTM, self).__init__()
+        self.num_layers = 2
+        self.lstm = nn.LSTM(2, 256, num_layers=self.num_layers, batch_first=True, bidirectional=True)
+        self.linear = nn.Linear(512, 1)
+        self.device = device
 
     def forward(self, x):
-        mask = self.generate_square_subsequent_mask(len(x)).to(device)
-        src = self.pos_encoding(self.embedding(x))
+        h0 = torch.zeros(self.num_layers * 2, x.size(0), 256).to(device)  # hidden state
+        c0 = torch.zeros(self.num_layers * 2, x.size(0), 256).to(device)  # cell state
 
-        out = self.encoder_layer(src)
-        out = self.transformer_encoder(out, mask)
-        out = self.decoder(out)
+        out, _ = self.lstm(x, (h0, c0))
+        out = self.linear(out[:, -1, :])  # [batch, 1]
 
         return out
 
-    def generate_square_subsequent_mask(self, sz):
-        mask = (torch.triu(torch.ones(sz, sz)) == 1).transpose(0, 1)
-        mask = mask.float().masked_fill(mask == 0, float('-inf')).masked_fill(mask == 1, float(0.0))
 
-        return mask
-
-
-class Transformer(nn.Module):
-    def __init__(self, n_feature, n_past, n_future, n_layers, n_head, dim_embed, dropout):
-        super(Transformer, self).__init__()
-
-        self.n_feature = n_feature
-        self.n_past = n_past
-        self.n_future = n_future
-        self.n_layers = n_layers
-        self.n_head = n_head
-        self.dim_embed = dim_embed
-        self.dropout = dropout
-
-        self.embedding_src = nn.Linear(n_feature, dim_embed)
-        self.embedding_tgt = nn.Linear(n_future, dim_embed)
-
-        self.transformer = nn.Transformer(d_model=dim_embed, nhead=n_head, batch_first=True)
-
-        self.decoder = nn.Linear(dim_embed, n_future)
-
-    def forward(self, x, y):
-        src = self.embedding_src(x)
-        tgt = self.embedding_tgt(y)
-
-        out = self.transformer(src, tgt)
-        out = self.decoder(out)
-
-        return out[:, -1, :]
-
-class PositionalEncoding(nn.Module):
-    def __init__(self, d_model, max_len=10000):
-        super(PositionalEncoding, self).__init__()
-
-        pe = torch.zeros(max_len, d_model)
-        position = torch.arange(0, max_len, dtype=torch.float).unsqueeze(1)
-        div_term = torch.exp(torch.arange(0, d_model, 2).float() * (-math.log(10000.0) / d_model))
-        pe[:, 0::2] = torch.sin(position * div_term)
-        pe[:, 1::2] = torch.cos(position * div_term)
-        pe = pe.unsqueeze(0).transpose(0, 1)
-        self.register_buffer('pe', pe)
-
-    def forward(self, x):
-        return x + self.pe[:x.size(0), :]
-
-
-model = Transformer(n_feature=2, n_past=30, n_future=1, n_layers=4, n_head=2, dim_embed=256, dropout=0.1)
+model = BiLSTM(device)
 model.to(device)
 
 
-criterion = nn.MSELoss()
-optimizer = torch.optim.AdamW(model.parameters(), lr=1e-5)
+criterion = nn.MSELoss(reduction='mean')
+optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
 
 
 def train_one_epoch(model, data_loader, criterion, optimizer, device):
@@ -168,9 +103,8 @@ def train_one_epoch(model, data_loader, criterion, optimizer, device):
         for _, (X, y) in enumerate(data_loader):
             X = X.float().to(device)
             y = y.float().to(device)
-            # y = y.unsqueeze(-1)
 
-            output = model(X, y.unsqueeze(-1))   # forward
+            output = model(X)   # forward
             loss = criterion(output, y)
             loss_value = loss.item()
             train_loss += loss_value
@@ -197,16 +131,14 @@ def evaluate(model, data_loader, criterion, device):
         for _, (X, y) in enumerate(data_loader):
             X = X.float().to(device)
             y = y.float().to(device)
-            # y = y.unsqueeze(-1)
 
-            output = model(X, y.unsqueeze(-1))
+            output = model(X)
             loss = criterion(output, y)
             loss_value = loss.item()
             valid_loss += loss_value
 
             y_list += y.detach().reshape(-1).tolist()
             output_list += output.detach().reshape(-1).tolist()
-            # print("y:", y_list[:100], "\nout:", output_list[:100])
             pbar.update(1)
 
     return valid_loss/total, y_list, output_list
@@ -219,13 +151,12 @@ print("Start Training..")
 for epoch in range(start_epoch, epochs):
     print(f"Epoch: {epoch}")
     epoch_loss = train_one_epoch(model, train_loader, criterion, optimizer, device)
-    print(f"Training Loss: {epoch_loss:.5f}")
+    print(f"Training Loss: {epoch_loss:}")
 
     valid_loss, y_list, output_list = evaluate(model, valid_loader, criterion, device)
-    # print("y:", y_list[:100], "\nout:", output_list[:100])
-    rmse = np.sqrt(valid_loss)
-    # print(f"Validation Loss: {valid_loss:.5f}")
-    # print(f'RMSE is {rmse:.5f}')
+    # rmse = np.sqrt(valid_loss)
+    # print(f"Validation Loss: {valid_loss:}")
+    # print(f'RMSE is {rmse:}')
 
     y_list = minmax_scaler2.inverse_transform(np.array(y_list).reshape(-1, 1)).reshape(-1)
     output_list = minmax_scaler2.inverse_transform(np.array(output_list).reshape(-1, 1)).reshape(-1)
