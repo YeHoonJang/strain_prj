@@ -1,5 +1,6 @@
 import os
 import tqdm
+import math
 
 import pandas as pd
 import numpy as np
@@ -64,45 +65,94 @@ valid_loader = DataLoader(valid_data, batch_size=batch_size, drop_last=True, num
 
 
 # Transformer
-class Transformer(nn.Module):
-    def __init__(self, n_feature, n_past, n_future, n_layers, n_head, dim_model, dim_embed, dropout):
-        super(Transformer, self).__init__()
+class TransformerEncoder(nn.Module):
+    def __init__(self, n_feature, n_past, n_future, n_layers, n_head, dim_embed, dropout):
+        super(TransformerEncoder, self).__init__()
+
         self.n_feature = n_feature
         self.n_past = n_past
         self.n_future = n_future
         self.n_layers = n_layers
         self.n_head = n_head
-        self.dim_model = dim_model
         self.dim_embed = dim_embed
         self.dropout = dropout
 
-        self.embedding_1 = nn.Linear(n_feature, dim_model)    # n_feature -> dim_model 사이즈로 embedding
-        self.embedding_2 = nn.Linear(n_future, dim_model)
-        # self.embedding_2 = nn.Embedding(batch_size, n_future, dim_embed)
-        self.fc = nn.Linear(dim_model, n_future)    # dim_model -> n_future 사이즈
-        self.transformer = nn.Transformer(batch_first=True)
-        # self.relu = nn.ReLU()
+        self.embedding = nn.Linear(n_feature, dim_embed)    # n_feature -> dim_model 사이즈로 embedding
+        self.pos_encoding = PositionalEncoding(dim_embed)
+
+        self.encoder_layer = nn.TransformerEncoderLayer(d_model=dim_embed, nhead=n_head, dropout=dropout)
+        self.transformer_encoder = nn.TransformerEncoder(self.encoder_layer, num_layers=n_layers)
+
+        self.decoder = nn.Linear(dim_embed, n_future)
+
+
+    def forward(self, x):
+        mask = self.generate_square_subsequent_mask(len(x)).to(device)
+        src = self.pos_encoding(self.embedding(x))
+
+        out = self.encoder_layer(src)
+        out = self.transformer_encoder(out, mask)
+        out = self.decoder(out)
+
+        return out
+
+    def generate_square_subsequent_mask(self, sz):
+        mask = (torch.triu(torch.ones(sz, sz)) == 1).transpose(0, 1)
+        mask = mask.float().masked_fill(mask == 0, float('-inf')).masked_fill(mask == 1, float(0.0))
+
+        return mask
+
+
+class Transformer(nn.Module):
+    def __init__(self, n_feature, n_past, n_future, n_layers, n_head, dim_embed, dropout):
+        super(Transformer, self).__init__()
+
+        self.n_feature = n_feature
+        self.n_past = n_past
+        self.n_future = n_future
+        self.n_layers = n_layers
+        self.n_head = n_head
+        self.dim_embed = dim_embed
+        self.dropout = dropout
+
+        self.embedding_src = nn.Linear(n_feature, dim_embed)
+        self.embedding_tgt = nn.Linear(n_future, dim_embed)
+
+        self.transformer = nn.Transformer(d_model=dim_embed, nhead=n_head, batch_first=True)
+
+        self.decoder = nn.Linear(dim_embed, n_future)
 
     def forward(self, x, y):
-        # print(y)
-        # print(x.size())
-        # y = torch.zeros(batch_size, self.n_future, self.dim_model).to(device)
-        # print("self.embedding(x), y:", self.embedding_1(x).size(), self.embedding_2(y).size())
-        # y = y.view(batch_size, self.n_future, 1)
-        out = self.transformer(self.embedding_1(x), self.embedding_2(y))
-        # print("output:", out.size(), "out[:, -1, :]", out[:, :, -1].size())
-        # print(out)
-        # print("self.fc(out):", self.fc(out).size(), "self.fc(out[:, -1, :])", self.fc(out[:, -1, :]).size())
-        out = self.fc(out)
+        src = self.embedding_src(x)
+        tgt = self.embedding_tgt(y)
+
+        out = self.transformer(src, tgt)
+        out = self.decoder(out)
+
         return out[:, -1, :]
 
+class PositionalEncoding(nn.Module):
+    def __init__(self, d_model, max_len=10000):
+        super(PositionalEncoding, self).__init__()
 
-model = Transformer(n_feature=2, n_past=30, n_future=1, n_layers=8, n_head=8, dim_model=512, dim_embed=256, dropout=0.1)
+        pe = torch.zeros(max_len, d_model)
+        position = torch.arange(0, max_len, dtype=torch.float).unsqueeze(1)
+        div_term = torch.exp(torch.arange(0, d_model, 2).float() * (-math.log(10000.0) / d_model))
+        pe[:, 0::2] = torch.sin(position * div_term)
+        pe[:, 1::2] = torch.cos(position * div_term)
+        pe = pe.unsqueeze(0).transpose(0, 1)
+        self.register_buffer('pe', pe)
+
+    def forward(self, x):
+        return x + self.pe[:x.size(0), :]
+
+
+model = Transformer(n_feature=2, n_past=30, n_future=1, n_layers=4, n_head=2, dim_embed=256, dropout=0.1)
 model.to(device)
 
 
 criterion = nn.MSELoss()
-optimizer = torch.optim.AdamW(model.parameters(), lr=0.001)
+optimizer = torch.optim.AdamW(model.parameters(), lr=1e-5)
 
 
 def train_one_epoch(model, data_loader, criterion, optimizer, device):
@@ -180,8 +230,11 @@ for epoch in range(start_epoch, epochs):
 
     plt.clf()
     plt.figure(figsize=(10, 8))
-    plt.plot(y_list)
-    plt.plot(output_list)
+    plt.plot(y_list, label='actual')
+    plt.plot(output_list, label='predict')
+    plt.xlabel('TimeStamp')
+    plt.ylabel('Strain')
+    plt.legend()
     data_path = os.path.join(os.getcwd(), "data", "figure")
     if not os.path.isdir(data_path):
         os.mkdir(data_path)
