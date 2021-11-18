@@ -13,4 +13,4 @@ https://github.com/YeHoonJang/strain_prj/blob/main/figure/vae_with_mse_figure_10
 
 ### transformer with only encoder
 ![This is an image](
-https://github.com/YeHoonJang/strain_prj/blob/main/figure/transformer_encoder_figure_100.png)  
+https://github.com/YeHoonJang/strain_prj/blob/main/figure/transformer_figure_encoder_100.png)  
