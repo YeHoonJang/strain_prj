@@ -39,7 +39,7 @@ device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 print(f'Initializing Device: {device}')
 
 # Data Setting
-file_path = os.path.join(os.getcwd(), "data/01000002.txt")
+file_path = os.path.join(os.getcwd(), "data/01000513.txt")
 total_data = pd.read_csv(file_path, sep="\t", index_col="Timestamp")
 # total_data = total_data.loc[:, ["AccZ", "Str1", "Str2", "Str3"]]
 total_data = total_data.loc[:, ["Str1", "Str2", "Str3"]]
@@ -94,7 +94,6 @@ optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
 
 def train_one_epoch(model, data_loader, criterion, optimizer, device):
     model.train()
-    criterion.train()
 
     train_loss = 0.0
     total = len(data_loader)
@@ -116,30 +115,30 @@ def train_one_epoch(model, data_loader, criterion, optimizer, device):
 
     return train_loss/total
 
-@torch.no_grad()    #no autograd (backpropagation X)
+# @torch.no_grad()    #no autograd (backpropagation X)
 def evaluate(model, data_loader, criterion, device):
     y_list = []
     output_list = []
 
     model.eval()
-    criterion.eval()
 
     valid_loss = 0.0
     total = len(data_loader)
 
-    with tqdm.tqdm(total=total) as pbar:
-        for _, (X, y) in enumerate(data_loader):
-            X = X.float().to(device)
-            y = y.float().to(device)
+    with torch.no_grad():
+        with tqdm.tqdm(total=total) as pbar:
+            for _, (X, y) in enumerate(data_loader):
+                X = X.float().to(device)
+                y = y.float().to(device)
 
-            output = model(X)
-            loss = criterion(output, y)
-            loss_value = loss.item()
-            valid_loss += loss_value
+                output = model(X)
+                loss = criterion(output, y)
+                loss_value = loss.item()
+                valid_loss += loss_value
 
-            y_list += y.detach().reshape(-1).tolist()
-            output_list += output.detach().reshape(-1).tolist()
-            pbar.update(1)
+                y_list += y.detach().reshape(-1).tolist()
+                output_list += output.detach().reshape(-1).tolist()
+                pbar.update(1)
 
     return valid_loss/total, y_list, output_list
 
@@ -176,7 +175,7 @@ for epoch in range(start_epoch, epochs):
     textstr = f"MSE: {MSE:.3f}\nRMSE: {RMSE:.3f}"
     plt.gcf().text(0.5, 0.01, textstr, wrap=True, horizontalalignment='center', fontsize=10)
 
-    data_path = os.path.join(os.getcwd(), "data", "figure")
+    data_path = os.path.join(os.getcwd(), "data", "figure_bilstm")
     if not os.path.isdir(data_path):
         os.mkdir(data_path)
 

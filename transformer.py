@@ -40,10 +40,10 @@ device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 print(f'Initializing Device: {device}')
 
 # Data Setting
-file_path = os.path.join(os.getcwd(), "data/01000002.txt")
+file_path = os.path.join(os.getcwd(), "data/01000513.txt")
 total_data = pd.read_csv(file_path, sep="\t", index_col="Timestamp")
 # total_data = total_data.loc[:, ["AccZ", "Str1", "Str2", "Str3"]]
-total_data = total_data.loc[:, ["Str1", "Str2", "Str3"]]
+total_data = total_data.loc[:, ["AccZ", "Str1", "Str2", "Str3"]]
 
 minmax_scaler = MinMaxScaler(feature_range=(-1, 1))
 minmax_scaler = minmax_scaler.fit(total_data)
@@ -67,44 +67,6 @@ valid_loader = DataLoader(valid_data, batch_size=batch_size, drop_last=True, num
 
 
 # Transformer
-class TransformerEncoder(nn.Module):
-    def __init__(self, n_feature, n_past, n_future, n_layers, n_head, dim_embed, dropout):
-        super(TransformerEncoder, self).__init__()
-
-        self.n_feature = n_feature
-        self.n_past = n_past
-        self.n_future = n_future
-        self.n_layers = n_layers
-        self.n_head = n_head
-        self.dim_embed = dim_embed
-        self.dropout = dropout
-
-        self.embedding = nn.Linear(n_feature, dim_embed)    # n_feature -> dim_model 사이즈로 embedding
-        self.pos_encoding = PositionalEncoding(dim_embed)
-
-        self.encoder_layer = nn.TransformerEncoderLayer(d_model=dim_embed, nhead=n_head, dropout=dropout)
-        self.transformer_encoder = nn.TransformerEncoder(self.encoder_layer, num_layers=n_layers)
-
-        self.decoder = nn.Linear(dim_embed, n_future)
-
-
-    def forward(self, x):
-        mask = self.generate_square_subsequent_mask(len(x)).to(device)
-        src = self.pos_encoding(self.embedding(x))
-
-        out = self.encoder_layer(src)
-        out = self.transformer_encoder(out, mask)
-        out = self.decoder(out)
-
-        return out
-
-    def generate_square_subsequent_mask(self, sz):
-        mask = (torch.triu(torch.ones(sz, sz)) == 1).transpose(0, 1)
-        mask = mask.float().masked_fill(mask == 0, float('-inf')).masked_fill(mask == 1, float(0.0))
-
-        return mask
-
-
 class Transformer(nn.Module):
     def __init__(self, n_feature, n_past, n_future, n_layers, n_head, dim_embed, dropout):
         super(Transformer, self).__init__()
@@ -133,33 +95,17 @@ class Transformer(nn.Module):
 
         return out[:, -1, :]
 
-class PositionalEncoding(nn.Module):
-    def __init__(self, d_model, max_len=10000):
-        super(PositionalEncoding, self).__init__()
 
-        pe = torch.zeros(max_len, d_model)
-        position = torch.arange(0, max_len, dtype=torch.float).unsqueeze(1)
-        div_term = torch.exp(torch.arange(0, d_model, 2).float() * (-math.log(10000.0) / d_model))
-        pe[:, 0::2] = torch.sin(position * div_term)
-        pe[:, 1::2] = torch.cos(position * div_term)
-        pe = pe.unsqueeze(0).transpose(0, 1)
-        self.register_buffer('pe', pe)
-
-    def forward(self, x):
-        return x + self.pe[:x.size(0), :]
-
-
-model = Transformer(n_feature=2, n_past=30, n_future=1, n_layers=4, n_head=2, dim_embed=256, dropout=0.1)
+model = Transformer(n_feature=3, n_past=30, n_future=1, n_layers=4, n_head=2, dim_embed=256, dropout=0.1)
 model.to(device)
 
 
-criterion = nn.MSELoss()
+criterion = nn.MSELoss(reduction='mean')
 optimizer = torch.optim.AdamW(model.parameters(), lr=1e-5)
 
 
 def train_one_epoch(model, data_loader, criterion, optimizer, device):
     model.train()
-    criterion.train()
 
     train_loss = 0.0
     total = len(data_loader)
@@ -182,32 +128,33 @@ def train_one_epoch(model, data_loader, criterion, optimizer, device):
 
     return train_loss/total
 
-@torch.no_grad()    #no autograd (backpropagation X)
+# @torch.no_grad()    #no autograd (backpropagation X)
 def evaluate(model, data_loader, criterion, device):
     y_list = []
     output_list = []
 
+
     model.eval()
-    criterion.eval()
 
     valid_loss = 0.0
     total = len(data_loader)
 
-    with tqdm.tqdm(total=total) as pbar:
-        for _, (X, y) in enumerate(data_loader):
-            X = X.float().to(device)
-            y = y.float().to(device)
-            # y = y.unsqueeze(-1)
+    with torch.no_grad():
+        with tqdm.tqdm(total=total) as pbar:
+            for _, (X, y) in enumerate(data_loader):
+                X = X.float().to(device)
+                y = y.float().to(device)
+                # y = y.unsqueeze(-1)
 
-            output = model(X, y.unsqueeze(-1))
-            loss = criterion(output, y)
-            loss_value = loss.item()
-            valid_loss += loss_value
+                output = model(X, y.unsqueeze(-1))
+                loss = criterion(output, y)
+                loss_value = loss.item()
+                valid_loss += loss_value
 
-            y_list += y.detach().reshape(-1).tolist()
-            output_list += output.detach().reshape(-1).tolist()
-            # print("y:", y_list[:100], "\nout:", output_list[:100])
-            pbar.update(1)
+                y_list += y.detach().reshape(-1).tolist()
+                output_list += output.detach().reshape(-1).tolist()
+                # print("y:", y_list[:100], "\nout:", output_list[:100])
+                pbar.update(1)
 
     return valid_loss/total, y_list, output_list
 

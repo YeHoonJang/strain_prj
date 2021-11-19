@@ -40,17 +40,18 @@ device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 print(f'Initializing Device: {device}')
 
 # Data Setting
-file_path = os.path.join(os.getcwd(), "data/01000513.txt")
-total_data = pd.read_csv(file_path, sep="\t", index_col="Timestamp")
+file_path = os.path.join(os.getcwd(), "data/total_data.csv")
+# total_data = pd.read_csv(file_path, sep="\t", index_col="Timestamp")
+total_data = pd.read_csv(file_path)
 # total_data = total_data.loc[:, ["AccZ", "Str1", "Str2", "Str3"]]
-total_data = total_data.loc[:, ["AccZ", "Str1", "Str2", "Str3"]]
+total_data = total_data.loc[:, ["accz", "str1", "str2", "str3"]]
 
 minmax_scaler = MinMaxScaler(feature_range=(-1, 1))
 minmax_scaler = minmax_scaler.fit(total_data)
 total_data_scaled = minmax_scaler.transform(total_data)
 
-minmax_scaler2 = minmax_scaler.fit(np.array(total_data.Str3[:]).reshape(-1, 1))
-total_data_scaled2 = minmax_scaler2.transform(np.array(total_data.Str3[:]).reshape(-1, 1))
+minmax_scaler2 = minmax_scaler.fit(np.array(total_data.str3[:]).reshape(-1, 1))
+total_data_scaled2 = minmax_scaler2.transform(np.array(total_data.str3[:]).reshape(-1, 1))
 
 
 train_valid_split = int(len(total_data_scaled) * 0.3)   #argparse
@@ -192,7 +193,7 @@ for epoch in range(start_epoch, epochs):
     textstr = f"MSE: {MSE:.3f}\nRMSE: {RMSE:.3f}"
     plt.gcf().text(0.5, 0.01, textstr, wrap=True, horizontalalignment='center', fontsize=10)
 
-    data_path = os.path.join(os.getcwd(), "data", "figure")
+    data_path = os.path.join(os.getcwd(), "data", "figure_total")
     if not os.path.isdir(data_path):
         os.mkdir(data_path)
 
