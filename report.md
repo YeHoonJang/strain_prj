@@ -2,7 +2,7 @@
 
 ## BiLSTM
 ![This is an image](
-https://github.com/YeHoonJang/strain_prj/blob/main/figure/bilstm_figure_100.png)  
+https://github.com/YeHoonJang/strain_prj/blob/main/figure/new_bilstm_figure_100.png)  
 
 ## GRU
 ![This is an image](
