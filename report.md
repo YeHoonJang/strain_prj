@@ -22,11 +22,11 @@ https://github.com/YeHoonJang/strain_prj/blob/main/figure/vae_with_mse_figure_10
 
 ### transformer
 ![This is an image](
-https://github.com/YeHoonJang/strain_prj/blob/main/figure/transformer_figure_100.png)
+https://github.com/YeHoonJang/strain_prj/blob/main/figure/new_transformer_figure_100.png)
 
 ### transformer encoder
 ![This is an image](
-https://github.com/YeHoonJang/strain_prj/blob/main/figure/transformer_figure_encoder_100.png)  
+https://github.com/YeHoonJang/strain_prj/blob/main/figure/new_transformer_figure_encoder_100.png)  
 
 --------------------------------
 ## VAE-Transformer
